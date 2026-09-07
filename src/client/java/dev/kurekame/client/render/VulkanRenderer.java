@@ -3,11 +3,14 @@ package dev.kurekame.client.render;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.kurekame.client.FarlandsClient;
 import dev.kurekame.client.data.BlockLibrary;
+import dev.kurekame.client.lod.VisibleChunk;
 import dev.kurekame.client.mixin.VulkanGpuTextureMixinAccessor;
 import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+import org.joml.Vector3fc;
 import org.lwjgl.BufferUtils;
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
@@ -16,7 +19,10 @@ import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
 
 public class VulkanRenderer {
@@ -95,8 +101,59 @@ public class VulkanRenderer {
                 long colorImageView = getOrCreateColorImageView(colorTexture.vkImage());
                 long depthImageView = getOrCreateDepthImageView(depthTexture.vkImage());
                 Vector3f cameraPos = Minecraft.getInstance().gameRenderer.mainCamera().position().toVector3f();
+                Vector3fc cameraDir = Minecraft.getInstance().gameRenderer.mainCamera().forwardVector();
 
-                VK10.vkCmdFillBuffer(vkCommandBuffer, VulkanState.getVisibleChunkCountBuffer(), 0, 4, 0);
+                List<VisibleChunk> chunks = FarlandsClient.getInstance().chunks;
+
+                List<VisibleChunk> visibleChunks = new ArrayList<>();
+
+                DagGraphFlattener.FlattenedBuffers flattened = FarlandsClient.getInstance().flattened;
+
+                try (MemoryStack stack = MemoryStack.stackPush()) {
+                    int size = chunks.size() * 20;
+
+                    PointerBuffer pData = stack.mallocPointer(1);
+                    int mapResult = VK10.vkMapMemory(VulkanState.getDevice(), VulkanState.getVisibleChunksMemory(), 0, size, 0, pData);
+                    if (mapResult != VK10.VK_SUCCESS) {
+                        throw new RuntimeException("vkMapMemory failed for block library upload, result: " + mapResult);
+                    }
+
+                    ByteBuffer byteBuf = pData.getByteBuffer(0, size);
+                    IntBuffer intBuf = byteBuf.asIntBuffer();
+
+                    for (int i = 0; i < chunks.size(); i++) {
+                        if (i < flattened.rootGpuIndices().length) {
+                            VisibleChunk chunk = chunks.get(i);
+                            float minX = chunk.originX(), maxX = chunk.originX() + chunk.size();
+                            float minY = chunk.originY(), maxY = chunk.originY() + chunk.size();
+                            float minZ = chunk.originZ(), maxZ = chunk.originZ() + chunk.size();
+
+                            for (int j = 0; j < 8; j++) {
+                                float cx = (j & 1) != 0 ? maxX : minX;
+                                float cy = (j & 2) != 0 ? maxY : minY;
+                                float cz = (j & 4) != 0 ? maxZ : minZ;
+                                float dot = (cx - cameraPos.x) * cameraDir.x() + (cy - cameraPos.y) * cameraDir.y() + (cz - cameraPos.z) * cameraDir.z();
+
+                                if (dot > 0) {
+                                    int base = visibleChunks.size() * 5;
+                                    intBuf.put(base, flattened.rootGpuIndices()[i]);
+                                    intBuf.put(base + 1, Float.floatToRawIntBits(chunk.originX()));
+                                    intBuf.put(base + 2, Float.floatToRawIntBits(chunk.originY()));
+                                    intBuf.put(base + 3, Float.floatToRawIntBits(chunk.originZ()));
+                                    intBuf.put(base + 4, Float.floatToRawIntBits(chunk.size()));
+
+                                    visibleChunks.add(chunk);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    VK10.vkUnmapMemory(VulkanState.getDevice(), VulkanState.getVisibleChunksMemory());
+                }
+
+
+                VK10.vkCmdFillBuffer(vkCommandBuffer, VulkanState.getVisibleChunkCountBuffer(), 0, 4, visibleChunks.size());
 
                 Matrix4f viewProj = new Matrix4f(projectionMatrix).mul(modelViewMatrix);
                 Matrix4f invViewProj = new Matrix4f(viewProj).invert();
@@ -114,32 +171,6 @@ public class VulkanRenderer {
                             VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                             VK10.VK_ACCESS_TRANSFER_WRITE_BIT,
                             VK10.VK_ACCESS_SHADER_READ_BIT | VK10.VK_ACCESS_SHADER_WRITE_BIT
-                    );
-
-                    VK10.vkCmdBindPipeline(vkCommandBuffer, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, chunkSelectionPipeline);
-                    VK10.vkCmdBindDescriptorSets(
-                            vkCommandBuffer,
-                            VK10.VK_PIPELINE_BIND_POINT_COMPUTE,
-                            chunkSelectionPipelineLayout,
-                            0,
-                            stack.longs(chunkSelectionDescriptorSet),
-                            null
-                    );
-
-                    VK10.vkCmdDispatch(vkCommandBuffer, Math.max(Math.ceilDiv(FarlandsClient.getInstance().chunks.size(), 64), 1), 1, 1);
-
-                    bufferBarrier(
-                            vkCommandBuffer,
-                            VulkanState.getVisibleChunksBuffer(),
-                            VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                            VK10.VK_ACCESS_SHADER_WRITE_BIT, VK10.VK_ACCESS_SHADER_READ_BIT
-                    );
-
-                    bufferBarrier(
-                            vkCommandBuffer,
-                            VulkanState.getVisibleChunkCountBuffer(),
-                            VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                            VK10.VK_ACCESS_SHADER_WRITE_BIT, VK10.VK_ACCESS_SHADER_READ_BIT
                     );
 
                     imageBarrier(

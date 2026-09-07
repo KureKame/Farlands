@@ -263,7 +263,7 @@ public class VulkanHelpers {
             long[] visibleChunksStaging = createVulkanBuffer(
                     chunkListSize,
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+                    VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
             );
             long visibleChunksBufferHandle = visibleChunksStaging[0];
             long visibleChunksMemoryHandle = visibleChunksStaging[1];

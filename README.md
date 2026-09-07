@@ -1,4 +1,4 @@
-# Farlands (With GPU Chunk Selection Pass)
+# Farlands (With CPU Chunk Selection Pass)
 
 ## Setup
 

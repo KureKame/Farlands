@@ -1,0 +1,19 @@
+{
+	"required": true,
+	"package": "dev.kurekame.client.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"SpriteContentsMixinAccessor",
+		"VulkanGpuTextureMixinAccessor",
+		"VulkanCommandEncoderMixinAccessor",
+		"CommandEncoderMixinAccessor",
+		"VulkanCommandEncoderMixin",
+		"LevelRendererMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}
